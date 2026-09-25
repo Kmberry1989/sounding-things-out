@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d12">
+<title>Sounding Things Out — cooperative jam studio (prototype)</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div id="brand">🎚️ Sounding Things Out <span class="proto">prototype</span></div>
+    <div id="netdot" class="offline" title="sync status"></div>
+  </header>
+
+  <main id="main">
+    <!-- LOBBY -->
+    <section id="screen-lobby" class="screen active">
+      <div class="card">
+        <div class="row space"><h2>Studio Lobby</h2><span id="onlineCount" class="pill">0 hanging</span></div>
+        <div id="presenceRow" class="avatars"></div>
+      </div>
+      <div class="card">
+        <h3>Spitball wall <span class="fine">— throw ideas, no judgment</span></h3>
+        <div id="spitball" class="chat"></div>
+        <div class="row"><input id="spitInput" placeholder="“what if the chorus goes full choir…”" maxlength="140"><button id="spitSend" class="primary">Send</button></div>
+      </div>
+      <div class="row space"><h2>Session doors</h2><button id="newSessionBtn" class="primary">+ New session</button></div>
+      <div id="doorList"></div>
+      <p class="fine">🚪 Green = open session, come on in. 🔴 Red = recording — knock and the room votes.</p>
+    </section>
+
+    <!-- STUDIO -->
+    <section id="screen-studio" class="screen">
+      <div id="noSession" class="card center">
+        <p>No session yet. Mingle in the lobby and open a door — or start one.</p>
+        <button class="primary" id="goLobbyBtn">Go to lobby</button>
+      </div>
+      <div id="sessionWrap" class="hidden">
+        <div id="doorSign" class="door open"><span class="lamp"></span><span id="doorText">OPEN SESSION</span></div>
+        <div class="card">
+          <div class="row space"><div><h2 id="sessName">—</h2><div id="sessMeta" class="fine"></div></div><button id="leaveSess" class="ghost">Leave</button></div>
+          <div class="row wrap" id="memberRow"></div>
+          <div id="joinReqs"></div>
+        </div>
+        <div class="card transport">
+          <div class="row space">
+            <label>BPM <input id="bpm" type="range" min="60" max="180" value="120"><b id="bpmVal">120</b></label>
+            <label class="row"><input type="checkbox" id="metroChk" checked> 🥁 metronome</label>
+            <label class="row"><input type="checkbox" id="loopChk"> loop</label>
+          </div>
+          <div class="row big">
+            <button id="countBtn" class="ghost">1-2-3-4</button>
+            <button id="playBtn" class="primary bigbtn">▶ Play</button>
+            <button id="recBtn" class="recbtn">⏺ Rec</button>
+          </div>
+          <div class="row"><span class="fine">Key:</span><b id="sessKey">C</b><span class="fine">Vibe:</span><b id="sessVibe">—</b></div>
+        </div>
+        <div class="card">
+          <div class="row space"><h3>Tracks</h3><button id="addTrackBtn" class="primary">+ Add track</button></div>
+          <div id="trackList"></div>
+        </div>
+        <div class="card">
+          <div class="row space"><h3>Master scope</h3>
+            <div class="seg" id="scopeSeg"><button data-v="wave" class="on">Wave</button><button data-v="spec">Spectrogram</button></div>
+          </div>
+          <canvas id="scope" width="640" height="160"></canvas>
+        </div>
+        <div class="row">
+          <button id="exportBtn" class="primary">⬇ Export demo</button>
+          <button id="saveProjBtn">💾 Save project</button>
+        </div>
+        <p class="fine">Exports are always labeled <b>DEMO RECORDING</b>. Projects save tracks, effects &amp; mixer settings like a producer's desk. Audio clips live on this device in the prototype.</p>
+      </div>
+    </section>
+
+    <!-- PLAY -->
+    <section id="screen-play" class="screen">
+      <div class="seg big" id="instSeg">
+        <button data-i="drums" class="on">🥁 Drums</button><button data-i="keys">🎹 Keys</button><button data-i="theremin">📡 Theremin</button><button data-i="motion">🤳 Motion</button>
+      </div>
+      <div class="row space"><label class="row"><input type="checkbox" id="stayInKey" checked> Stay in key (<b id="keyLabel">C</b>)</label><span class="fine" id="armHint">arm a track in Studio to record</span></div>
+      <div id="instArea"></div>
+    </section>
+
+    <!-- WARM-UP -->
+    <section id="screen-warmup" class="screen">
+      <h2>Warm-up: get in character 🎭</h2>
+      <p class="fine">Every great take starts before the red light. Pick a vibe, get into it like a method actor, sketch the single's cover.</p>
+      <div id="vibeChips" class="chips"></div>
+      <div class="card" id="briefCard"><h3 id="briefName">—</h3><p id="briefText"></p><div class="row"><span class="pill" id="briefKey"></span><span class="pill" id="briefBpm"></span></div></div>
+      <div class="card">
+        <h3>Sketch the single's cover</h3>
+        <canvas id="coverCanvas" width="300" height="300"></canvas>
+        <div id="palette" class="row wrap"></div>
+        <div class="row"><button id="coverClear" class="ghost">Clear</button><button id="coverSave" class="primary">Set as cover</button></div>
+      </div>
+      <button id="warmStart" class="primary bigbtn wide">Open a session with this vibe</button>
+    </section>
+
+    <!-- LEARN -->
+    <section id="screen-learn" class="screen">
+      <div id="lessonList"></div>
+      <div id="lessonDetail" class="hidden">
+        <button id="lessonBack" class="ghost">← All lessons</button>
+        <div class="card" id="lessonBody"></div>
+      </div>
+    </section>
+
+    <!-- ME -->
+    <section id="screen-me" class="screen">
+      <div class="card">
+        <h2>My profile</h2>
+        <div class="row"><img id="photoPrev" class="bigavatar" alt="you"><div>
+          <input id="nameInput" placeholder="Your name" maxlength="24">
+          <textarea id="bioInput" placeholder="A few things about you…" maxlength="140" rows="2"></textarea>
+        </div></div>
+        <div class="row"><label class="btn">📷 Upload photo<input type="file" id="photoInput" accept="image/*" hidden></label><button id="avatarBtn" class="ghost">Initials avatar</button></div>
+        <button id="saveProfile" class="primary">Save profile</button>
+      </div>
+      <div class="card"><h3>My demos</h3><div id="demoList"><p class="fine">Nothing exported yet.</p></div></div>
+      <div class="card"><h3>About this prototype</h3><p class="fine">Full-vision sketch: lobby, sessions with voting doors, layered recording, toy-box instruments, warm-ups, lessons, demo export. Audio clips stay on this device; paste a Firebase config into <b>firebase-config.js</b> to light up live presence, chat &amp; sessions.</p></div>
+    </section>
+  </main>
+
+  <nav id="tabbar">
+    <button data-s="lobby" class="on">🏠<span>Lobby</span></button>
+    <button data-s="studio">🎚️<span>Studio</span></button>
+    <button data-s="play">🎹<span>Play</span></button>
+    <button data-s="warmup">🔥<span>Warm-up</span></button>
+    <button data-s="learn">🎓<span>Learn</span></button>
+    <button data-s="me">🙂<span>Me</span></button>
+  </nav>
+</div>
+
+<div id="countOverlay" class="hidden"><div id="countNum">4</div><div class="sub">get ready…</div></div>
+<div id="modal" class="hidden"><div class="sheet" id="modalSheet"></div></div>
+<div id="toasts"></div>
+<script src="firebase-config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
