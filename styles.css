@@ -93,6 +93,8 @@ input[type=range]{accent-color:var(--acc);}
 .piano .wk{position:absolute;top:0;bottom:0;background:#f2f0ea;border:1px solid #999;border-radius:0 0 6px 6px;}
 .piano .bk{position:absolute;top:0;height:60%;background:#15151c;border-radius:0 0 5px 5px;z-index:2;}
 .piano .wk.hit{background:var(--acc);} .piano .bk.hit{background:var(--acc);}
+.piano .wk span{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:11px;font-weight:700;color:#8a877f;pointer-events:none;}
+.piano .wk.hit span{color:#fff;}
 .theremin{height:300px;border-radius:16px;background:radial-gradient(circle at 50% 40%,#23232f,#121218);border:1px solid var(--line);position:relative;touch-action:none;overflow:hidden;margin:10px 0;}
 .theremin .dot{position:absolute;width:26px;height:26px;border-radius:50%;background:var(--acc);box-shadow:0 0 18px var(--acc);transform:translate(-50%,-50%);display:none;}
 .theremin .note{position:absolute;top:8px;left:12px;font-size:22px;font-weight:800;color:var(--acc);}
