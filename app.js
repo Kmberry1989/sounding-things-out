@@ -33,7 +33,7 @@ const S={
 function saveLS(){try{
   localStorage.setItem('mm_me',JSON.stringify(S.me));
   localStorage.setItem('mm_vibe',S.vibe.id);
-  localStorage.setItem('mm_sessions',JSON.stringify(S.sessions.filter(s=>!s.sim)));
+  localStorage.setItem('mm_sessions',JSON.stringify(S.sessions));
 }catch(e){}}
 function loadLS(){try{
   const m=JSON.parse(localStorage.getItem('mm_me')||'null'); if(m&&m.uid)S.me=m;
@@ -81,8 +81,8 @@ async function initFirebase(){
     // sessions
     FB.db.collection('mm_sessions').orderBy('updatedAt','desc').limit(20).onSnapshot(qs=>{
       const remote=[]; qs.forEach(d=>remote.push({id:d.id,...d.data()}));
-      const local=S.sessions.filter(s=>!s.sim&&!remote.find(r=>r.id===s.id));
-      S.sessions=[...remote,...local,...S.sessions.filter(s=>s.sim)];
+      const local=S.sessions.filter(s=>!remote.find(r=>r.id===s.id));
+      S.sessions=[...remote,...local];
       renderLobby(); if(S.screen==='studio')renderStudio();
     });
     // profile
@@ -91,27 +91,12 @@ async function initFirebase(){
   }catch(e){console.warn('firebase off',e);net('offline');}
 }
 function net(st){const d=$('#netdot');d.className=st==='live'?'live':'offline';d.title=st==='live'?'live sync':'offline sketch mode';}
-function fbSessionWrite(s){ if(!FB.on)return; const {sim,...rest}=s; FB.db.collection('mm_sessions').doc(s.id).set({...rest,updatedAt:Date.now()},{merge:true}).catch(()=>{}); }
+function fbSessionWrite(s){ if(!FB.on)return; FB.db.collection('mm_sessions').doc(s.id).set({...s,updatedAt:Date.now()},{merge:true}).catch(()=>{}); }
 function fbChatPush(m){ if(FB.on){FB.rtdb.ref('mm_chat').push(m);} }
 function fbProfileWrite(){ if(!FB.on)return; FB.db.collection('mm_profiles').doc(S.me.uid).set({name:S.me.name,bio:S.me.bio,photo:S.me.photo},{merge:true}).catch(()=>{}); }
 
-/* ============ seed data (so the sketch feels alive offline) ============ */
-function seed(){
-  if(S.sessions.length)return;
-  const t=Date.now();
-  S.sessions=[
-    {id:'seed1',sim:true,name:'Porch Sessions',vibe:'tender',key:'C',bpm:84,door:'open',policy:'open',creator:'seed',members:['m1','m2'],joinReq:[],cover:null,createdAt:t-7200e3,desc:'Sunday-evening strumming & humming'},
-    {id:'seed2',sim:true,name:'Midnight Demos',vibe:'moody',key:'D',bpm:76,door:'recording',policy:'vote',creator:'seed',members:['m3'],joinReq:[],cover:null,createdAt:t-3600e3,desc:'noir takes, red light on'},
-  ];
-  S.chat=[
-    {name:'Mara',text:'what if the chorus goes FULL choir??',ts:t-5000},
-    {name:'Theo',text:'i call dibs on theremin',ts:t-3000},
-    {name:'June',text:'someone bring the funky brief, i have IDEAS',ts:t-1000},
-  ];
-  S.presence=[{uid:'m1',name:'Mara',photo:''},{uid:'m2',name:'Theo',photo:''},{uid:'m3',name:'June',photo:''}];
-}
-const SEED_PEOPLE={m1:{name:'Mara'},m2:{name:'Theo'},m3:{name:'June'},seed:{name:'Studio'}};
-function personName(id){ if(id===S.me.uid)return S.me.name||'You'; const p=S.presence.find(p=>p.uid===id); if(p)return p.name; return (SEED_PEOPLE[id]||{}).name||'Guest'; }
+/* ============ people (real only — presence fills in when Firebase is live) ============ */
+function personName(id){ if(id===S.me.uid)return S.me.name||'You'; const p=S.presence.find(p=>p.uid===id); if(p)return p.name; return 'Guest'; }
 function avatarHTML(id,cls=''){ const p=S.presence.find(p=>p.uid===id); const photo=(id===S.me.uid?S.me.photo:(p&&p.photo))||'';
   const nm=esc(personName(id));
   if(photo)return `<img class="avatar ${cls}" src="${photo}" title="${nm}" alt="${nm}">`;
@@ -333,7 +318,7 @@ function sendSpit(){const i=$('#spitInput'),v=i.value.trim();if(!v)return;
 function newSessionModal(pref){
   openModal(`<h3>Open a new session 🚪</h3>
    <p class="fine">Name it like a band would.</p>
-   <input id="nsName" placeholder="e.g. Porch Sessions" maxlength="30" value="${esc(pref&&pref.name||'')}">
+   <input id="nsName" placeholder="e.g. Sunday Jam" maxlength="30" value="${esc(pref&&pref.name||'')}">
    <h3 style="margin-top:12px">Vibe</h3><div class="chips" id="nsVibes">${VIBES.map(v=>`<button data-v="${v.id}" class="${v.id===(pref&&pref.vibe||S.vibe.id)?'on':''}">${v.name}</button>`).join('')}</div>
    <h3>Who can walk in?</h3>
    <div class="seg" id="nsPolicy"><button data-p="open" class="on">Open door</button><button data-p="vote">Knock + vote</button><button data-p="locked">Locked</button></div>
@@ -368,9 +353,6 @@ function requestJoin(id){const s=S.sessions.find(x=>x.id===id);if(!s)return;
   if(s.joinReq.find(r=>r.uid===S.me.uid)){toast('Already knocking…');return;}
   s.joinReq.push({uid:S.me.uid,votes:{}});fbSessionWrite(s);saveLS();renderLobby();
   toast('Knock knock… members are voting');
-  // simulated members vote over a few seconds (sketch liveliness)
-  s.members.filter(m=>m!==S.me.uid&&SEED_PEOPLE[m]).forEach((m,i)=>setTimeout(()=>{if(!S.sessions.includes(s))return;
-    castVote(s,S.me.uid,m,Math.random()>.25);},1200+i*1400));
 }
 function castVote(s,reqUid,voterUid,yes){const r=s.joinReq.find(r=>r.uid===reqUid);if(!r||!s.members.includes(voterUid))return;
   r.votes[voterUid]=!!yes; fbSessionWrite(s);
@@ -809,7 +791,7 @@ function initialAvatar(name){const c=document.createElement('canvas');c.width=c.
 
 /* ============ INIT ============ */
 function init(){
-  loadLS();seed();
+  loadLS();
   $('#bpm').oninput=e=>{S.transport.bpm=+e.target.value;$('#bpmVal').textContent=e.target.value;};
   $('#metroChk').onchange=e=>S.transport.metro=e.target.checked;
   $('#loopChk').onchange=e=>S.transport.loop=e.target.checked;
