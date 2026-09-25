@@ -530,13 +530,15 @@ function renderDrumsToTrack(){ac();let t=armedTrack();if(!t)t=addTrack('drums');
   oc.startRendering().then(buf=>{t.buffer=buf;t.offset=0;S.transport.armedTrack=t.id;drawWave(t);renderTracks();toast('🥁 2 bars on "'+t.name+'"');})
   .catch(e=>toast('Render failed'));}
 
-/* ---- keys ---- */
-let keyOsc=null;
+/* ---- keys (polyphonic: one voice per touch, keyed by pointerId) ---- */
+const keyVoices=new Map();
 function keysUI(el){
   const root=keyRoot();let html='<div class="piano" id="piano">';
   const wnotes=[];for(let o=0;o<2;o++)[0,2,4,5,7,9,11].forEach(iv=>wnotes.push(root+iv+o*12));
-  const W=100/wnotes.length;let bi=0;
-  wnotes.forEach((m,i)=>{html+=`<div class="wk" data-m="${m}" style="left:${i*W}%;width:${W}%"></div>`;});
+  const W=100/wnotes.length;
+  const nname=m=>NOTES[((m%12)+12)%12];
+  wnotes.forEach((m,i)=>{const n=nname(m),oct=Math.floor(m/12)-1;
+    html+=`<div class="wk" data-m="${m}" style="left:${i*W}%;width:${W}%"><span>${n}${n==='C'?oct:''}</span></div>`;});
   // black keys: after white index where semitone gap (0:C#,1:D#,3:F#,4:G#,5:A#)
   const blackAfter={0:1,1:3,3:6,4:8,5:10};
   for(let o=0;o<2;o++)for(const[wi,off]of Object.entries(blackAfter)){const i=o*7+ +wi;const m=wnotes[i]+1;
@@ -546,20 +548,26 @@ function keysUI(el){
   piano.querySelectorAll('.wk,.bk').forEach(k=>{
     const down=e=>{e.preventDefault();ac();let m=+k.dataset.m;const snapped=snapToKey(m);
       if(snapped!==m){toast('🎯 snapped to '+NOTES[((snapped%12)+12)%12],900);}
-      k.classList.add('hit');keyNote(snapped,true);k._m=snapped;};
-    const up=()=>{k.classList.remove('hit');if(k._m!=null)keyNote(k._m,false);k._m=null;};
-    k.addEventListener('pointerdown',down);k.addEventListener('pointerup',up);k.addEventListener('pointerleave',up);});
+      k.classList.add('hit');keyVoiceStart(e.pointerId,snapped);};
+    const up=e=>{k.classList.remove('hit');keyVoiceStop(e.pointerId);};
+    k.addEventListener('pointerdown',down);
+    k.addEventListener('pointerup',up);
+    k.addEventListener('pointercancel',up);
+    k.addEventListener('pointerleave',up);});
   $('#keysRec').onclick=()=>{let t=armedTrack();if(!t||t.kind!=='keys')t=addTrack('keys');
     S.transport.armedTrack=t.id;go('studio');setTimeout(()=>toggleRec(),400);};}
-function keyNote(m,on){const c=AU.ctx;
-  if(on){keyNote(m,false);const o=c.createOscillator(),o2=c.createOscillator(),g=c.createGain();
-    o.type='triangle';o.frequency.value=mtof(m);o2.type='sine';o2.frequency.value=mtof(m)*2.001;
-    const g2=c.createGain();g2.gain.value=.15;o2.connect(g2);g2.connect(g);
-    g.gain.setValueAtTime(.0001,c.currentTime);g.gain.exponentialRampToValueAtTime(.5,c.currentTime+.01);
-    g.gain.setTargetAtTime(.28,c.currentTime+.02,.4);
-    o.connect(g);g.connect(AU.instBus);o.start();o2.start();keyOsc={o,o2,g,m};}
-  else if(keyOsc&&keyOsc.m===m){const{o,o2,g}=keyOsc,t=c.currentTime;g.gain.cancelScheduledValues(t);
-    g.gain.setTargetAtTime(.0001,t,.06);setTimeout(()=>{try{o.stop();o2.stop();}catch(e){}},300);keyOsc=null;}}
+function keyVoiceStart(pid,m){keyVoiceStop(pid);const c=AU.ctx;
+  const o=c.createOscillator(),o2=c.createOscillator(),g=c.createGain();
+  o.type='triangle';o.frequency.value=mtof(m);o2.type='sine';o2.frequency.value=mtof(m)*2.001;
+  const g2=c.createGain();g2.gain.value=.15;o2.connect(g2);g2.connect(g);
+  g.gain.setValueAtTime(.0001,c.currentTime);g.gain.exponentialRampToValueAtTime(.5,c.currentTime+.01);
+  g.gain.setTargetAtTime(.28,c.currentTime+.02,.4);
+  o.connect(g);g.connect(AU.instBus);o.start();o2.start();
+  keyVoices.set(pid,{o,o2,g});}
+function keyVoiceStop(pid){const v=keyVoices.get(pid);if(!v)return;keyVoices.delete(pid);
+  const t=AU.ctx.currentTime;v.g.gain.cancelScheduledValues(t);
+  v.g.gain.setTargetAtTime(.0001,t,.06);
+  setTimeout(()=>{try{v.o.stop();v.o2.stop();}catch(e){}},300);}
 
 /* ---- theremin ---- */
 let thNodes=null;
@@ -588,7 +596,7 @@ function thereminUI(el){
   pad.addEventListener('pointerup',end);pad.addEventListener('pointerleave',end);pad.addEventListener('pointercancel',end);
   $('#thRec').onclick=()=>{let t=armedTrack();if(!t||t.kind!=='theremin')t=addTrack('theremin');
     S.transport.armedTrack=t.id;go('studio');setTimeout(()=>toggleRec(),400);};}
-function stopMotion(){ if(window._motCleanup){try{window._motCleanup();}catch(e){}window._motCleanup=null;} if(thNodes){try{thNodes.o.stop();}catch(e){}thNodes=null;} if(keyOsc){try{keyOsc.o.stop();keyOsc.o2.stop();}catch(e){}keyOsc=null;} }
+function stopMotion(){ if(window._motCleanup){try{window._motCleanup();}catch(e){}window._motCleanup=null;} if(thNodes){try{thNodes.o.stop();}catch(e){}thNodes=null;} keyVoices.forEach((v,pid)=>keyVoiceStop(pid)); }
 
 /* ---- motion (tilt + camera) — the "i have no talent" instrument ---- */
 function motionUI(el){
