@@ -135,3 +135,27 @@ input[type=range]{accent-color:var(--acc);}
 .seccard{border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:10px;background:var(--card2);}
 .seccard.now{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc);}
 #songNow{margin-top:8px;font-weight:700;color:var(--acc);min-height:20px;}
+
+/* piano roll */
+.rollwrap{display:flex;gap:6px;margin-top:8px}
+.rollkeys{flex:0 0 44px}
+.rkey{height:26px;display:flex;align-items:center;justify-content:flex-end;padding-right:6px;
+  font-size:10px;color:#8a8aa3;border-bottom:1px solid #1c1c28;box-sizing:border-box}
+.rkey.c{color:#ffd166;font-weight:700;background:#1a1a26}
+.rollgridwrap{flex:1;overflow-x:auto;border:1px solid #26263a;border-radius:10px;background:#0c0c14}
+.rollgrid{position:relative;padding:0}
+.rrow{display:flex}
+.rcell{height:26px;flex:0 0 auto;border:none;border-right:1px solid #161624;border-bottom:1px solid #161624;
+  background:transparent;cursor:pointer;touch-action:manipulation;padding:0}
+.rcell.beat{background:#12121e;border-right-color:#2a2a44}
+.rcell:active{background:#2c2c52}
+.rnote{position:absolute;height:22px;top:0;background:linear-gradient(135deg,#b48cff,#7dd3fc);
+  border-radius:5px;cursor:pointer;box-shadow:0 0 8px #b48cff88;pointer-events:auto}
+/* magic chords */
+.chordpads{display:flex;gap:8px;flex-wrap:wrap}
+.chordpad{display:flex;flex-direction:column;gap:2px;align-items:stretch}
+.cp-play{background:linear-gradient(135deg,#2a1e4f,#1e3a5f);border:1px solid #b48cff66;color:#fff;
+  border-radius:10px;padding:8px 10px;font-size:14px;font-weight:700;cursor:pointer;min-width:56px}
+.cp-play span{display:block;font-size:10px;font-weight:400;color:#b48cff}
+.cp-play:active{transform:scale(.94)}
+.cp-add{align-self:center}
