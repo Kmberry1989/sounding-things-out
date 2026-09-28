@@ -24,7 +24,7 @@
       <div class="card">
         <h3>Spitball wall <span class="fine">— throw ideas, no judgment</span></h3>
         <div id="spitball" class="chat"></div>
-        <div class="row"><input id="spitInput" placeholder="“what if the chorus goes full choir…”" maxlength="140"><button id="spitSend" class="primary">Send</button></div>
+        <div class="row"><input id="spitInput" maxlength="140"><button id="spitSend" class="primary">Send</button></div>
       </div>
       <div class="row space"><h2>Session doors</h2><button id="newSessionBtn" class="primary">+ New session</button></div>
       <div id="doorList"></div>
@@ -72,6 +72,40 @@
           <button id="saveProjBtn">💾 Save project</button>
         </div>
         <p class="fine">Exports are always labeled <b>DEMO RECORDING</b>. Projects save tracks, effects &amp; mixer settings like a producer's desk. Audio clips live on this device in the prototype.</p>
+      </div>
+    </section>
+
+    <!-- SONG -->
+    <section id="screen-song" class="screen">
+      <div id="noSongSession" class="card center">
+        <p>Songs grow out of sessions. Open a door in the lobby first.</p>
+        <button class="primary" id="goLobbyBtn2">Go to lobby</button>
+      </div>
+      <div id="songWrap" class="hidden">
+        <div class="card">
+          <div class="row space">
+            <div><h2>🎼 Song</h2><div id="songMeta" class="fine"></div></div>
+            <div class="row">
+              <label class="row"><input type="checkbox" id="songLoopChk"> loop</label>
+              <button id="songPlayBtn" class="primary">▶ Play song</button>
+            </div>
+          </div>
+          <div id="songNow" class="fine"></div>
+        </div>
+        <div class="card">
+          <div class="row space"><h3>Loop library</h3></div>
+          <div id="loopLib"></div>
+          <div class="row wrap" style="margin-top:8px">
+            <button id="capDrumsBtn">🥁 Capture drum loop</button>
+            <button id="capTracksBtn">⤵ Capture track loops</button>
+          </div>
+          <p class="fine">Make a beat in Play → Drums, or record something in the Studio — then capture it here as a loop.</p>
+        </div>
+        <div class="card">
+          <div class="row space"><h3>Sections</h3><button id="addSectionBtn" class="primary">+ Add section</button></div>
+          <div id="sectionList"></div>
+          <p class="fine">A song is sections in order. Tap a loop chip to drop it into a section — or tap again to take it out.</p>
+        </div>
       </div>
     </section>
 
@@ -127,6 +161,7 @@
   <nav id="tabbar">
     <button data-s="lobby" class="on">🏠<span>Lobby</span></button>
     <button data-s="studio">🎚️<span>Studio</span></button>
+    <button data-s="song">🎼<span>Song</span></button>
     <button data-s="play">🎹<span>Play</span></button>
     <button data-s="warmup">🔥<span>Warm-up</span></button>
     <button data-s="learn">🎓<span>Learn</span></button>
