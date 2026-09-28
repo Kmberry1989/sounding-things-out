@@ -29,6 +29,7 @@ const S={
   stayInKey:true, inst:'drums', scopeView:'wave',
   tracks:[], // {id,name,kind,buffer,offset,gain,mute,solo,tune,echo,verb,color,live}
   song:{loops:[],sections:[],loopSong:false}, // loops: {id,name,kind,bars,pattern?,buffer?}; sections: {id,name,bars,loops:[loopId]}
+  roll:{notes:[],bars:1,len:2,oct:0,on:true}, // piano roll: notes {m,s,l}
   vibe:VIBES[3],
 };
 function saveLS(){try{
@@ -116,6 +117,10 @@ function ac(){ if(!AU.ctx){ const C=window.AudioContext||window.webkitAudioConte
   AU.master.connect(AU.analyser); AU.analyser.connect(AU.ctx.destination);
   AU.music=AU.ctx.createGain(); AU.music.connect(AU.master);
   AU.instBus=AU.ctx.createGain(); AU.instBus.connect(AU.music);
+  AU.magicBus=AU.ctx.createGain(); AU.magicBus.connect(AU.music);
+  const md=AU.ctx.createDelay(1); md.delayTime.value=.31;
+  const mfb=AU.ctx.createGain(); mfb.gain.value=.42;
+  AU.magicBus.connect(md); md.connect(mfb); mfb.connect(md); md.connect(AU.music);
   AU.cap=AU.ctx.createMediaStreamDestination();
   AU.noiseBuf=makeNoise(AU.ctx);
 } if(AU.ctx.state==='suspended')AU.ctx.resume(); return AU.ctx; }
@@ -171,6 +176,54 @@ function detectPitch(analyser){ analyser.getFloatTimeDomainData(_pa); const sr=A
   const f=sr/T0; return (f>50&&f<1200)?f:null; }
 function noteName(f){const m=Math.round(ftom(f));return NOTES[((m%12)+12)%12]+(Math.floor(m/12)-1);}
 
+/* ---- vocal hard-tune: offline render that snaps every pitched window to the key ---- */
+function detectPitchFast(data,sr){
+  const N=data.length;let rms=0;for(let i=0;i<N;i++)rms+=data[i]*data[i];rms=Math.sqrt(rms/N);
+  if(rms<0.015)return null;
+  let e0=0;for(let i=0;i<N;i++)e0+=data[i]*data[i];if(e0<=0)return null;
+  const minLag=Math.max(2,Math.floor(sr/1200)),maxLag=Math.min(N-2,Math.ceil(sr/50));
+  const corr=lag=>{let s=0;for(let i=0;i<N-lag;i++)s+=data[i]*data[i+lag];return s/e0;};
+  let bestLag=-1,bestVal=.3;
+  for(let lag=minLag;lag<=maxLag;lag++){const v=corr(lag);if(v>bestVal){bestVal=v;bestLag=lag;}}
+  if(bestLag<0)return null;
+  const y0=corr(bestLag-1),y1=bestVal,y2=corr(bestLag+1),den=(y0-2*y1+y2);
+  const shift=den!==0?.5*(y0-y2)/den:0; // parabolic interpolation
+  return sr/(bestLag+clamp(shift,-1,1));}
+function hardTuneBuffer(buf){
+  const sr=buf.sampleRate,nCh=buf.numberOfChannels,len=buf.length;
+  const N=1024,hop=256,nWin=Math.ceil(len/hop);
+  const in0=buf.getChannelData(0);
+  const ratios=new Float32Array(nWin),win=new Float32Array(N);
+  const scale=SCALES.major;
+  for(let w=0;w<nWin;w++){ // detect + snap: hard-stepped, no glide
+    const pos=w*hop;
+    for(let i=0;i<N;i++)win[i]=(pos+i<len)?in0[pos+i]:0;
+    const f=detectPitchFast(win,sr);
+    if(!f){ratios[w]=1;continue;}
+    const m=Math.round(ftom(f)),pc=((m%12)+12)%12;
+    let best=scale[0],bd=99;
+    for(const iv of scale){let d=Math.abs(iv-pc);d=Math.min(d,12-d);if(d<bd){bd=d;best=iv;}}
+    let diff=best-pc;if(diff>6)diff-=12;if(diff<-6)diff+=12;
+    ratios[w]=clamp(Math.pow(2,diff/12),.5,2);}
+  const hann=new Float32Array(N),wsum=new Float32Array(len);
+  for(let i=0;i<N;i++)hann[i]=.5*(1-Math.cos(2*Math.PI*i/N));
+  for(let w=0;w<nWin;w++){const pos=w*hop; // overlap weight (ratio-independent)
+    for(let i=0;i<N;i++){const o=pos+i;if(o<len)wsum[o]+=hann[i];}}
+  const out=AU.ctx.createBuffer(nCh,len,sr);
+  for(let ch=0;ch<nCh;ch++){ // resample-OLA pitch shift, timing preserved
+    const inch=buf.getChannelData(ch),outch=out.getChannelData(ch);
+    for(let w=0;w<nWin;w++){
+      const r=ratios[w],pos=w*hop;
+      for(let i=0;i<N;i++){
+        const p=(pos+i)*r,i0=Math.floor(p),fr=p-i0,o=pos+i; // sample the time-warped signal in[o*r]: pitch x r, phase-continuous
+        if(o>=len)break;
+        let v=0;
+        if(i0>=0&&i0+1<len)v=inch[i0]*(1-fr)+inch[i0+1]*fr;
+        else if(i0>=0&&i0<len)v=inch[i0];
+        outch[o]+=v*hann[i];}}
+    for(let i=0;i<len;i++)if(wsum[i]>1e-4)outch[i]/=wsum[i];}
+  return out;}
+
 /* ---- metronome + transport ---- */
 function click(t,accent){const c=AU.ctx,o=c.createOscillator(),g=c.createGain();o.type='square';o.frequency.value=accent?1960:1240;
   g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(accent?.5:.28,t+.004);g.gain.exponentialRampToValueAtTime(.0001,t+.06);
@@ -182,7 +235,7 @@ function schedAhead(){const c=AU.ctx,spb=60/S.transport.bpm,step=spb/4;
       else{stopTransport();break;}
     }
     if(AU.nextStep%4===0&&S.transport.metro)click(AU.nextStepT,AU.nextStep%16===0);
-    if(AU.songMode)songStep(AU.nextStep,AU.nextStepT);else drumStep(AU.nextStep,AU.nextStepT);
+    if(AU.songMode)songStep(AU.nextStep,AU.nextStepT);else{drumStep(AU.nextStep,AU.nextStepT);rollStep(AU.nextStep,AU.nextStepT);}
     AU.nextStep++;AU.nextStepT+=step;
   }}
 function drumStep(s,t){const p=S.drums;if(!p||!S.transport.playing)return;const i=s%16;
@@ -504,10 +557,12 @@ function songStep(s,t){
   const i=s%16;
   m.sec.loops.forEach(id=>{
     const l=S.song.loops.find(x=>x.id===id);
-    if(!l||l.kind!=='drums'||!l.pattern)return;
-    const p=l.pattern;
-    if(p.kick[i])kick(AU.ctx,AU.music,t);if(p.snare[i])snare(AU.ctx,AU.music,t);
-    if(p.hat[i])hat(AU.ctx,AU.music,t);if(p.clap[i])clap(AU.ctx,AU.music,t);});
+    if(!l)return;
+    if(l.kind==='drums'&&l.pattern){const p=l.pattern;
+      if(p.kick[i])kick(AU.ctx,AU.music,t);if(p.snare[i])snare(AU.ctx,AU.music,t);
+      if(p.hat[i])hat(AU.ctx,AU.music,t);if(p.clap[i])clap(AU.ctx,AU.music,t);}
+    if(l.kind==='piano'&&l.notes){const tot=l.bars*16,li=s%tot,sd=60/S.transport.bpm/4;
+      l.notes.forEach(n=>{if(n.s===li)schedNote(n.m,t,n.l*sd,.45);});}});
   const barInSec=Math.floor((s-m.start)/16)+1;
   const txt=`▶ ${m.sec.name} · bar ${barInSec}/${m.sec.bars}`;
   if(txt!==_songNowTxt){_songNowTxt=txt;const el=$('#songNow');if(el)el.textContent=txt;
@@ -549,7 +604,8 @@ function renderTracks(){const el=$('#trackList');if(!el)return;el.innerHTML='';
        <label>🏛️ Reverb<input type="range" min="0" max="1" step="0.01" value="${t.verb}" data-fx="verb"></label>
        <label>🔊 Volume<input type="range" min="0" max="1.2" step="0.01" value="${t.gain}" data-fx="gain"></label>
        <label>⏱️ Offset<input type="range" min="0" max="4" step="0.01" value="${t.offset}" data-fx="offset"></label>
-       <span class="fine" style="align-self:end">${t.buffer?t.buffer.duration.toFixed(1)+'s':'empty'}</span></div>`;
+       <span class="fine" style="align-self:end">${t.buffer?t.buffer.duration.toFixed(1)+'s':'empty'}</span></div>
+      ${t.kind==='mic'&&t.buffer?`<div class="row" style="gap:6px;margin-top:6px"><button class="mini" data-ht>⚡ Hard-tune vocal</button>${t.bufferOrig?'<button class="mini ghost" data-htu>↩ Undo</button>':''}<span class="fine">snaps every syllable to the key — robot-singer mode</span></div>`:''}`;
     el.appendChild(d);
     d.querySelector('[data-arm]').onclick=()=>{S.transport.armedTrack=S.transport.armedTrack===t.id?null:t.id;renderTracks();
       $('#armHint').textContent=S.transport.armedTrack?('recording into: '+t.name+' ('+t.kind+')'):'arm a track in Studio to record';};
@@ -558,6 +614,12 @@ function renderTracks(){const el=$('#trackList');if(!el)return;el.innerHTML='';
     d.querySelector('[data-del]').onclick=()=>{if(t.live){try{t.live.out.disconnect();}catch(e){}}S.tracks=S.tracks.filter(x=>x!==t);if(S.transport.armedTrack===t.id)S.transport.armedTrack=null;renderTracks();};
     d.querySelector('[data-snap]').onclick=()=>{const beat=60/S.transport.bpm;t.offset=Math.round(t.offset/beat)*beat;renderTracks();toast('🧲 Snapped to grid');};
     d.querySelectorAll('[data-fx]').forEach(r=>r.oninput=()=>{t[r.dataset.fx]=+r.value;ensureLive(t);});
+    const ht=d.querySelector('[data-ht]');
+    if(ht)ht.onclick=()=>{ac();toast('⚡ tuning…');
+      setTimeout(()=>{try{t.bufferOrig=t.buffer;t.buffer=hardTuneBuffer(t.buffer);drawWave(t);renderTracks();toast('⚡ hard-tuned to '+S.transport.key);}
+        catch(e){t.buffer=t.bufferOrig;delete t.bufferOrig;toast('tune failed');}},80);};
+    const htu=d.querySelector('[data-htu]');
+    if(htu)htu.onclick=()=>{t.buffer=t.bufferOrig;delete t.bufferOrig;drawWave(t);renderTracks();toast('↩ back to the raw take');};
     t._canvas=d.querySelector('canvas');drawWave(t);});
 }
 function drawWave(t){const c=t._canvas;if(!c)return;const x=c.getContext('2d');x.clearRect(0,0,c.width,c.height);
@@ -619,6 +681,7 @@ $('#stayInKey').onchange=e=>{S.stayInKey=e.target.checked;};
 function renderInstrument(){const el=$('#instArea');stopMotion();
   if(S.inst==='drums')return drumsUI(el);
   if(S.inst==='keys')return keysUI(el);
+  if(S.inst==='roll')return rollUI(el);
   if(S.inst==='theremin')return thereminUI(el);
   return motionUI(el);}
 function armedTrack(){return S.tracks.find(t=>t.id===S.transport.armedTrack);}
@@ -654,6 +717,104 @@ function renderDrumsToTrack(){ac();let t=armedTrack();if(!t)t=addTrack('drums');
   AU.noiseBuf=keep;
   oc.startRendering().then(buf=>{t.buffer=buf;t.offset=0;S.transport.armedTrack=t.id;drawWave(t);renderTracks();toast('🥁 2 bars on "'+t.name+'"');})
   .catch(e=>toast('Render failed'));}
+
+/* ---- piano roll + magic chords ---- */
+let _rollScroll=0;
+function schedNote(m,t,dur,vol){const c=AU.ctx;
+  const o=c.createOscillator(),o2=c.createOscillator(),g=c.createGain();
+  o.type='triangle';o.frequency.value=mtof(m);o2.type='sine';o2.frequency.value=mtof(m)*2.001;
+  const g2=c.createGain();g2.gain.value=.15;o2.connect(g2);g2.connect(g);
+  g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(vol||.5,t+.012);
+  g.gain.setTargetAtTime(.3,t+.03,.35);g.gain.setTargetAtTime(.0001,t+dur,.06);
+  o.connect(g);g.connect(AU.instBus);o.start(t);o2.start(t);
+  const stop=t+dur+.5;try{o.stop(stop);o2.stop(stop);}catch(e){}}
+function shimmer(m,t){const c=AU.ctx,o=c.createOscillator(),g=c.createGain();
+  o.type='sine';o.frequency.value=mtof(m);
+  g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(.14,t+.02);
+  g.gain.exponentialRampToValueAtTime(.0001,t+1.1);
+  o.connect(g);g.connect(AU.magicBus||AU.instBus);o.start(t);try{o.stop(t+1.2);}catch(e){}}
+function diaChords(){const r=keyRoot(),degs=[0,2,4,5,7,9,11],qual=['maj','min','min','maj','maj','min','dim'],num=['I','ii','iii','IV','V','vi','vii°'];
+  return degs.map((d,i)=>({n:num[i],root:r+d,q:qual[i],
+    label:NOTES[((r+d)%12+12)%12]+(qual[i]==='maj'?'':qual[i]==='min'?'m':'°')}));}
+function chordTones(ch){const third=ch.q==='maj'?4:3,fifth=ch.q==='dim'?6:7;return [0,third,fifth,12];}
+function playMagicChord(ch){ac();const t=AU.ctx.currentTime+.03;
+  chordTones(ch).forEach((iv,i)=>{const m=ch.root+iv;
+    schedNote(m,t+i*.045,1,.5);shimmer(m+12,t+i*.045);shimmer(m+24,t+i*.045+.02);});}
+const PROGS=[{n:'I–V–vi–IV',d:[0,4,5,3]},{n:'vi–IV–I–V',d:[5,3,0,4]},{n:'ii–V–I',d:[1,4,0]},{n:'I–vi–IV–V',d:[0,5,3,4]}];
+function insertChord(ch){const R=S.roll;
+  const maxEnd=R.notes.reduce((a,n)=>Math.max(a,n.s+n.l),0);
+  const at=Math.ceil(maxEnd/16)*16, needBars=Math.ceil((at+16)/16);
+  if(needBars>R.bars)R.bars=Math.min(4,needBars);
+  chordTones(ch).forEach(iv=>R.notes.push({m:ch.root+iv,s:at,l:12}));
+  renderInstrument();toast('✨ '+ch.label+' written into the roll');}
+function insertProg(p){const R=S.roll,chords=diaChords();
+  R.notes=[];R.bars=Math.min(4,p.d.length);
+  p.d.forEach((ci,bar)=>{const ch=chords[ci];
+    chordTones(ch).forEach(iv=>R.notes.push({m:ch.root+iv,s:bar*16,l:14}));});
+  renderInstrument();toast('✨ '+p.n+' laid down — '+p.d.length+' bars');}
+function rollUI(el){const R=S.roll,root=keyRoot()+R.oct*12;
+  const rows=[];for(let o=1;o>=0;o--)for(const iv of [0,2,4,5,7,9,11])rows.push(root+iv+o*12);
+  const cols=R.bars*16,CW=30;
+  let html=`<div class="card"><div class="row space"><h3>🎼 Piano roll</h3>
+    <button class="primary mini" id="rollSave">💾 Save to Song</button></div>
+    <div class="row wrap" style="gap:6px;margin-bottom:6px">
+      <div class="seg" id="rollBars">${[1,2,4].map(b=>`<button data-b="${b}" class="${R.bars===b?'on':''}">${b} bar${b>1?'s':''}</button>`).join('')}</div>
+      <div class="seg" id="rollLen">${[1,2,4].map(l=>`<button data-l="${l}" class="${R.len===l?'on':''}">${l} step${l>1?'s':''}</button>`).join('')}</div>
+      <button class="mini" id="rollOctDn">↓ oct</button><button class="mini" id="rollOctUp">↑ oct</button>
+      <button class="mini ghost" id="rollClear">clear</button>
+      <label class="row"><input type="checkbox" id="rollOn" ${R.on?'checked':''}> <span class="fine">plays w/ transport</span></label>
+    </div>
+    <div class="fine">Tap a square to place a note · tap a note to erase it</div>
+    <div id="chordBar"></div>
+    <div class="row" style="margin:6px 0;gap:6px"><span class="fine">✨ progressions:</span><div class="chips" id="progBar" style="margin:0"></div></div>
+    <div class="rollwrap"><div class="rollkeys">${rows.map(m=>{const n=NOTES[((m%12)+12)%12];
+      return `<div class="rkey${n==='C'?' c':''}">${n}${n==='C'?(Math.floor(m/12)-1):''}</div>`;}).join('')}</div>
+    <div class="rollgridwrap"><div class="rollgrid" id="rollGrid" style="width:${cols*CW}px">`;
+  rows.forEach(m=>{html+=`<div class="rrow">`;
+    for(let s=0;s<cols;s++)html+=`<button class="rcell${s%4===0?' beat':''}" data-m="${m}" data-s="${s}" style="width:${CW}px"></button>`;
+    html+=`</div>`;});
+  R.notes.forEach((n,ni)=>{const ri=rows.indexOf(n.m);if(ri<0)return;
+    html+=`<div class="rnote" data-ni="${ni}" style="top:${ri*26}px;left:${n.s*CW}px;width:${n.l*CW-3}px"></div>`;});
+  html+=`</div></div></div></div>`;
+  el.innerHTML=html;
+  const gw=el.querySelector('.rollgridwrap');if(gw)gw.scrollLeft=_rollScroll;
+  $('#rollBars').querySelectorAll('button').forEach(b=>b.onclick=()=>{R.bars=+b.dataset.b;
+    R.notes=R.notes.filter(n=>n.s<R.bars*16);renderInstrument();});
+  $('#rollLen').querySelectorAll('button').forEach(b=>b.onclick=()=>{R.len=+b.dataset.l;renderInstrument();});
+  $('#rollOctDn').onclick=()=>{R.oct=Math.max(-2,R.oct-1);renderInstrument();};
+  $('#rollOctUp').onclick=()=>{R.oct=Math.min(2,R.oct+1);renderInstrument();};
+  $('#rollClear').onclick=()=>{R.notes=[];renderInstrument();};
+  $('#rollSave').onclick=captureRollLoop;
+  $('#rollOn').onchange=e=>{R.on=e.target.checked;};
+  const grid=$('#rollGrid');
+  grid.parentElement.addEventListener('scroll',()=>{_rollScroll=grid.parentElement.scrollLeft;},{passive:true});
+  grid.onclick=e=>{
+    const rn=e.target.closest('.rnote');
+    if(rn){R.notes.splice(+rn.dataset.ni,1);renderInstrument();return;}
+    const c=e.target.closest('.rcell');if(!c)return;
+    const m=+c.dataset.m,s=+c.dataset.s;
+    const ex=R.notes.findIndex(n=>n.m===m&&s>=n.s&&s<n.s+n.l);
+    if(ex>=0)R.notes.splice(ex,1);else R.notes.push({m,s,l:R.len});
+    renderInstrument();};
+  renderChords();}
+function renderChords(){const bar=$('#chordBar');if(!bar)return;
+  const chords=diaChords();
+  bar.innerHTML='<div class="fine" style="margin:8px 0 4px">✨ magic chords — tap to play, <b>+</b> writes it into the roll:</div><div class="chordpads">'+
+    chords.map((ch,i)=>`<div class="chordpad"><button class="cp-play" data-i="${i}">${ch.label}<span>${ch.n}</span></button><button class="mini cp-add" data-i="${i}" title="write into roll">+</button></div>`).join('')+'</div>';
+  bar.querySelectorAll('.cp-play').forEach(b=>b.onclick=()=>playMagicChord(diaChords()[+b.dataset.i]));
+  bar.querySelectorAll('.cp-add').forEach(b=>b.onclick=()=>insertChord(diaChords()[+b.dataset.i]));
+  const pb=$('#progBar');
+  pb.innerHTML=PROGS.map((p,i)=>`<button data-i="${i}">${p.n}</button>`).join('');
+  pb.querySelectorAll('button').forEach(b=>b.onclick=()=>insertProg(PROGS[+b.dataset.i]));}
+function captureRollLoop(){const R=S.roll;
+  if(!R.notes.length){toast('Draw some notes first');return;}
+  const n=S.song.loops.filter(l=>l.kind==='piano').length+1;
+  S.song.loops.push({id:uid(),name:'Roll '+n,kind:'piano',bars:R.bars,
+    notes:JSON.parse(JSON.stringify(R.notes))});
+  toast('🎼 roll saved to Song loops — arrange it in the Song tab');}
+function rollStep(s,t){const R=S.roll;if(!R.on||!R.notes.length||!S.transport.playing)return;
+  const total=R.bars*16,i=s%total,stepDur=60/S.transport.bpm/4;
+  R.notes.forEach(n=>{if(n.s===i)schedNote(n.m,t,n.l*stepDur,.45);});}
 
 /* ---- keys (polyphonic: one voice per touch, keyed by pointerId) ---- */
 const keyVoices=new Map();
