@@ -28,6 +28,7 @@ const S={
   transport:{bpm:120,metro:true,loop:false,playing:false,recording:false,armedTrack:null,recSource:'mic',key:'C',vibe:null,cover:null},
   stayInKey:true, inst:'drums', scopeView:'wave',
   tracks:[], // {id,name,kind,buffer,offset,gain,mute,solo,tune,echo,verb,color,live}
+  song:{loops:[],sections:[],loopSong:false}, // loops: {id,name,kind,bars,pattern?,buffer?}; sections: {id,name,bars,loops:[loopId]}
   vibe:VIBES[3],
 };
 function saveLS(){try{
@@ -48,6 +49,7 @@ function go(name){
   $$('#tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.s===name));
   $$('.screen').forEach(s=>s.classList.toggle('active',s.id==='screen-'+name));
   if(name==='studio')renderStudio();
+  if(name==='song')renderSong();
   if(name==='lobby')renderLobby();
   if(name==='play')renderInstrument();
   if(name==='warmup')renderWarmup();
@@ -105,7 +107,8 @@ function avatarHTML(id,cls=''){ const p=S.presence.find(p=>p.uid===id); const ph
 
 /* ============ AUDIO ENGINE ============ */
 const AU={ctx:null,master:null,music:null,instBus:null,cap:null,analyser:null,micStream:null,noiseBuf:null,ir:null,
-  metroTimer:null,nextBeat:0,nextStep:0,playT0:0,playing:false,loopTimer:null,scopeRAF:0,mr:null,mrChunks:[],monSrc:null,tuneTimer:null};
+  metroTimer:null,nextBeat:0,nextStep:0,playT0:0,playing:false,loopTimer:null,scopeRAF:0,mr:null,mrChunks:[],monSrc:null,tuneTimer:null,
+  songMode:false,songSec:-1,songSrcs:[],songMap:[],songTotal:0};
 
 function ac(){ if(!AU.ctx){ const C=window.AudioContext||window.webkitAudioContext; AU.ctx=new C();
   AU.master=AU.ctx.createGain(); AU.master.gain.value=.9;
@@ -174,8 +177,12 @@ function click(t,accent){const c=AU.ctx,o=c.createOscillator(),g=c.createGain();
   o.connect(g);g.connect(AU.master);o.start(t);o.stop(t+.08);}
 function schedAhead(){const c=AU.ctx,spb=60/S.transport.bpm,step=spb/4;
   while(AU.nextStepT<c.currentTime+.18){
+    if(AU.songMode&&AU.nextStep>=AU.songTotal){
+      if(S.song.loopSong){AU.nextStep=0;AU.songSec=-1;}
+      else{stopTransport();break;}
+    }
     if(AU.nextStep%4===0&&S.transport.metro)click(AU.nextStepT,AU.nextStep%16===0);
-    drumStep(AU.nextStep,AU.nextStepT);
+    if(AU.songMode)songStep(AU.nextStep,AU.nextStepT);else drumStep(AU.nextStep,AU.nextStepT);
     AU.nextStep++;AU.nextStepT+=step;
   }}
 function drumStep(s,t){const p=S.drums;if(!p||!S.transport.playing)return;const i=s%16;
@@ -184,6 +191,7 @@ function drumStep(s,t){const p=S.drums;if(!p||!S.transport.playing)return;const 
   markStep(i);}
 function markStep(i){$$('#drumSeq .cell').forEach(el=>el.classList.toggle('now',+el.dataset.i===i));}
 function startTransport(){ac();if(AU.playing)return;AU.playing=true;S.transport.playing=true;
+  AU.songMode=false;stopSongAudio();
   AU.nextStep=0;AU.nextStepT=AU.ctx.currentTime+.08;
   AU.metroTimer=setInterval(schedAhead,30);
   // start clip sources
@@ -199,7 +207,9 @@ function scheduleLoop(){clearTimeout(AU.loopTimer);if(!S.transport.loop)return;
     scheduleLoop();},dur*1000);}
 function stopClips(){S.tracks.forEach(t=>{if(t.live){t.live.srcs.forEach(s=>{try{s.stop()}catch(e){}});t.live.srcs=[];}});}
 function stopTransport(){if(!AU.playing&&!S.transport.recording)return;
-  clearInterval(AU.metroTimer);clearTimeout(AU.loopTimer);stopClips();AU.playing=false;S.transport.playing=false;
+  clearInterval(AU.metroTimer);clearTimeout(AU.loopTimer);stopClips();
+  AU.songMode=false;stopSongAudio();_songNowTxt='';const sn=$('#songNow');if(sn)sn.textContent='';
+  AU.playing=false;S.transport.playing=false;
   if(S.transport.recording)finishRecording(); updateTransportUI(); markStep(-1);}
 function togglePlay(){ac();AU.playing?stopTransport():startTransport();}
 
@@ -318,7 +328,7 @@ function sendSpit(){const i=$('#spitInput'),v=i.value.trim();if(!v)return;
 function newSessionModal(pref){
   openModal(`<h3>Open a new session 🚪</h3>
    <p class="fine">Name it like a band would.</p>
-   <input id="nsName" placeholder="e.g. Sunday Jam" maxlength="30" value="${esc(pref&&pref.name||'')}">
+   <input id="nsName" placeholder="Session name" maxlength="30" value="${esc(pref&&pref.name||'')}">
    <h3 style="margin-top:12px">Vibe</h3><div class="chips" id="nsVibes">${VIBES.map(v=>`<button data-v="${v.id}" class="${v.id===(pref&&pref.vibe||S.vibe.id)?'on':''}">${v.name}</button>`).join('')}</div>
    <h3>Who can walk in?</h3>
    <div class="seg" id="nsPolicy"><button data-p="open" class="on">Open door</button><button data-p="vote">Knock + vote</button><button data-p="locked">Locked</button></div>
@@ -393,7 +403,122 @@ function renderStudio(){const s=curSession();
   renderTracks();updateTransportUI();startScope();
 }
 function updateTransportUI(){$('#playBtn').textContent=AU.playing?'⏸ Stop':'▶ Play';
-  const rb=$('#recBtn');rb.classList.toggle('armed',S.transport.recording);rb.textContent=S.transport.recording?'⏺ Stop':'⏺ Rec';}
+  const rb=$('#recBtn');rb.classList.toggle('armed',S.transport.recording);rb.textContent=S.transport.recording?'⏺ Stop':'⏺ Rec';
+  updateSongPlayBtn();}
+
+/* ============ SONG BUILDER (loops -> sections -> song) ============ */
+const SEC_NAMES=['Intro','Verse','Chorus','Verse 2','Bridge','Chorus 2','Outro'];
+function renderSong(){const s=curSession();
+  $('#noSongSession').classList.toggle('hidden',!!s);
+  $('#songWrap').classList.toggle('hidden',!s);
+  if(!s)return;
+  $('#goLobbyBtn2').onclick=()=>go('lobby');
+  const sg=S.song;
+  const totalBars=sg.sections.reduce((a,x)=>a+x.bars,0);
+  $('#songMeta').textContent=`${sg.sections.length} section${sg.sections.length===1?'':'s'} · ${totalBars} bars · ${sg.loops.length} loop${sg.loops.length===1?'':'s'}`;
+  $('#songLoopChk').checked=!!sg.loopSong;
+  $('#songLoopChk').onchange=e=>{sg.loopSong=e.target.checked;};
+  $('#songPlayBtn').onclick=()=>{(AU.songMode&&AU.playing)?stopSong():startSong();};
+  $('#capDrumsBtn').onclick=captureDrumLoop;
+  $('#capTracksBtn').onclick=captureTrackLoops;
+  $('#addSectionBtn').onclick=addSection;
+  const lib=$('#loopLib');lib.innerHTML='';
+  if(!sg.loops.length)lib.innerHTML='<p class="fine">No loops yet — capture your drum pattern or a recorded track below.</p>';
+  sg.loops.forEach(l=>{const d=document.createElement('div');d.className='loopchip';
+    d.innerHTML=`<span>${l.kind==='drums'?'🥁':'🎵'}</span><b>${esc(l.name)}</b><span class="fine">${l.bars} bar${l.bars===1?'':'s'}</span>
+      <span style="flex:1"></span><button class="mini" data-rn title="rename">✎</button><button class="mini ghost" data-del title="delete">✕</button>`;
+    d.querySelector('[data-rn]').onclick=()=>renameModal('Rename loop',l.name,v=>{if(v)l.name=v;});
+    d.querySelector('[data-del]').onclick=()=>{S.song.loops=S.song.loops.filter(x=>x.id!==l.id);
+      S.song.sections.forEach(sec=>sec.loops=sec.loops.filter(id=>id!==l.id));renderSong();};
+    lib.appendChild(d);});
+  const sl=$('#sectionList');sl.innerHTML='';
+  if(!sg.sections.length)sl.innerHTML='<p class="fine">No sections yet — add one and drop loops into it.</p>';
+  sg.sections.forEach((sec,idx)=>{const d=document.createElement('div');d.className='seccard';d.dataset.sec=sec.id;
+    d.innerHTML=`<div class="row space">
+        <div class="row"><b>${esc(sec.name)}</b><button class="mini" data-rn title="rename">✎</button></div>
+        <div class="row">
+          <button class="mini" data-up title="move up">↑</button><button class="mini" data-dn title="move down">↓</button>
+          <button class="mini" data-dec title="fewer bars">−</button><b>${sec.bars}</b><span class="fine">bars</span><button class="mini" data-inc title="more bars">+</button>
+          <button class="mini ghost" data-del title="delete section">✕</button>
+        </div></div>
+      <div class="chips" style="margin:8px 0 0"></div>`;
+    const chips=d.querySelector('.chips');
+    if(!sg.loops.length)chips.innerHTML='<span class="fine">capture a loop first</span>';
+    sg.loops.forEach(l=>{const b=document.createElement('button');
+      b.className=sec.loops.includes(l.id)?'on':'';
+      b.textContent=(l.kind==='drums'?'🥁 ':'🎵 ')+l.name;
+      b.onclick=()=>{const i=sec.loops.indexOf(l.id);if(i>=0)sec.loops.splice(i,1);else sec.loops.push(l.id);renderSong();};
+      chips.appendChild(b);});
+    d.querySelector('[data-rn]').onclick=()=>renameModal('Rename section',sec.name,v=>{if(v)sec.name=v;});
+    d.querySelector('[data-del]').onclick=()=>{S.song.sections=S.song.sections.filter(x=>x.id!==sec.id);renderSong();};
+    d.querySelector('[data-up]').onclick=()=>{if(idx>0){S.song.sections.splice(idx,1);S.song.sections.splice(idx-1,0,sec);renderSong();}};
+    d.querySelector('[data-dn]').onclick=()=>{if(idx<S.song.sections.length-1){S.song.sections.splice(idx,1);S.song.sections.splice(idx+1,0,sec);renderSong();}};
+    d.querySelector('[data-dec]').onclick=()=>{sec.bars=Math.max(1,sec.bars-1);renderSong();};
+    d.querySelector('[data-inc]').onclick=()=>{sec.bars=Math.min(32,sec.bars+1);renderSong();};
+    sl.appendChild(d);});
+  updateSongPlayBtn();}
+function renameModal(title,cur,cb){openModal(`<h3>${esc(title)}</h3>
+  <input id="rnInput" maxlength="24" value="${esc(cur)}">
+  <div class="row" style="margin-top:10px"><button class="ghost" id="rnCancel">Cancel</button><button class="primary" id="rnGo" style="flex:1">Save</button></div>`);
+  $('#rnCancel').onclick=closeModal;
+  $('#rnGo').onclick=()=>{cb(($('#rnInput').value||'').trim());closeModal();renderSong();};
+  setTimeout(()=>{const i=$('#rnInput');if(i)i.focus();},60);}
+function captureDrumLoop(){
+  const n=S.song.loops.filter(l=>l.kind==='drums').length+1;
+  S.song.loops.push({id:uid(),name:'Drums '+n,kind:'drums',bars:1,
+    pattern:JSON.parse(JSON.stringify(S.drums))});
+  renderSong();toast('🥁 drum loop captured');}
+function captureTrackLoops(){
+  const ts=S.tracks.filter(t=>t.buffer);
+  if(!ts.length){toast('Record a track in the Studio first');go('studio');return;}
+  const spb=60/S.transport.bpm;
+  ts.forEach(t=>S.song.loops.push({id:uid(),name:t.name,kind:'audio',
+    bars:Math.max(1,Math.round(t.buffer.duration/(4*spb))),buffer:t.buffer}));
+  renderSong();toast(`⤵ captured ${ts.length} loop${ts.length===1?'':'s'}`);}
+function addSection(){
+  const used=S.song.sections.map(s=>s.name);
+  const name=SEC_NAMES.find(n=>!used.includes(n))||('Section '+(S.song.sections.length+1));
+  S.song.sections.push({id:uid(),name,bars:4,loops:[]});renderSong();}
+
+/* ---- song playback ---- */
+let _songNowTxt='';
+function startSong(){ac();
+  const sg=S.song;
+  if(!sg.sections.length){toast('Add a section first');return;}
+  if(!sg.sections.some(s=>s.loops.length)){toast('Drop a loop into a section first');return;}
+  stopTransport();
+  AU.songMode=true;AU.songSec=-1;AU.songSrcs=[];
+  AU.songMap=[];let acc=0;
+  sg.sections.forEach((sec,idx)=>{const steps=sec.bars*16;AU.songMap.push({sec,idx,start:acc,steps});acc+=steps;});
+  AU.songTotal=acc;_songNowTxt='';
+  AU.playing=true;S.transport.playing=true;
+  AU.nextStep=0;AU.nextStepT=AU.ctx.currentTime+.08;
+  AU.metroTimer=setInterval(schedAhead,30);
+  updateTransportUI();}
+function stopSong(){stopTransport();}
+function stopSongAudio(){(AU.songSrcs||[]).forEach(s=>{try{s.stop()}catch(e){}});AU.songSrcs=[];}
+function songStep(s,t){
+  const m=AU.songMap.find(x=>s>=x.start&&s<x.start+x.steps);
+  if(!m)return;
+  if(m.idx!==AU.songSec){AU.songSec=m.idx;startSectionAudio(m.sec,t);}
+  const i=s%16;
+  m.sec.loops.forEach(id=>{
+    const l=S.song.loops.find(x=>x.id===id);
+    if(!l||l.kind!=='drums'||!l.pattern)return;
+    const p=l.pattern;
+    if(p.kick[i])kick(AU.ctx,AU.music,t);if(p.snare[i])snare(AU.ctx,AU.music,t);
+    if(p.hat[i])hat(AU.ctx,AU.music,t);if(p.clap[i])clap(AU.ctx,AU.music,t);});
+  const barInSec=Math.floor((s-m.start)/16)+1;
+  const txt=`▶ ${m.sec.name} · bar ${barInSec}/${m.sec.bars}`;
+  if(txt!==_songNowTxt){_songNowTxt=txt;const el=$('#songNow');if(el)el.textContent=txt;
+    $$('#sectionList .seccard').forEach(el2=>el2.classList.toggle('now',el2.dataset.sec===m.sec.id));}}
+function startSectionAudio(sec,t){stopSongAudio();
+  sec.loops.forEach(id=>{
+    const l=S.song.loops.find(x=>x.id===id);
+    if(!l||l.kind!=='audio'||!l.buffer)return;
+    const src=AU.ctx.createBufferSource();src.buffer=l.buffer;src.loop=true;
+    src.connect(AU.music);src.start(t);AU.songSrcs.push(src);});}
+function updateSongPlayBtn(){const b=$('#songPlayBtn');if(b)b.textContent=(AU.songMode&&AU.playing)?'⏸ Stop song':'▶ Play song';}
 function addTrack(kind,name){const colors={mic:'#ff4d5e',keys:'#6cb8ff',drums:'#ffb020',theremin:'#b48cff',motion:'#35d07f'};
   const icons={mic:'🎤',keys:'🎹',drums:'🥁',theremin:'📡',motion:'🤳'};
   const t={id:uid(),name:name||(icons[kind]+' '+(S.tracks.length+1)),kind,icon:icons[kind],buffer:null,offset:0,
