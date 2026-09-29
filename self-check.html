@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d12">
+<title>Phone self-check — Sounding Things Out</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: #0d0d12; color: #f2f0ea; font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+  #wrap { max-width: 560px; margin: 0 auto; padding: 16px 16px 48px; }
+  header.top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  header.top a { color: #9fd0ff; text-decoration: none; font-size: 15px; }
+  h1 { font-size: 22px; margin: 8px 0 4px; }
+  .sub { color: #b9b4a8; font-size: 14px; line-height: 1.45; margin: 0 0 16px; }
+  .card { background: #17171f; border: 1px solid #2a2a35; border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 17px; margin: 0 0 6px; }
+  .card p { font-size: 14px; color: #cfcabf; line-height: 1.45; margin: 0 0 12px; }
+  .bigbtn { display: block; width: 100%; padding: 14px; font-size: 16px; font-weight: 700; border: 0; border-radius: 12px;
+             background: #e8722a; color: #14100b; cursor: pointer; }
+  .bigbtn:active { transform: scale(0.98); }
+  .bigbtn:disabled { opacity: 0.55; }
+  .ghostbtn { display: block; width: 100%; padding: 12px; margin-top: 8px; font-size: 15px; border-radius: 12px;
+              background: transparent; color: #cfcabf; border: 1px solid #3a3a46; cursor: pointer; }
+  .result { display: none; margin-top: 12px; padding: 12px; border-radius: 10px; font-size: 14px; line-height: 1.45; }
+  .result.show { display: block; }
+  .result.pass { background: #12351f; border: 1px solid #2f7a44; }
+  .result.fail { background: #3a1414; border: 1px solid #8a2f2f; }
+  .result.run { background: #1c1c26; border: 1px solid #3a3a46; }
+  .pill { display: inline-block; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; padding: 3px 10px; border-radius: 999px; margin-bottom: 6px; }
+  .pass .pill { background: #2f7a44; color: #eafff0; }
+  .fail .pill { background: #8a2f2f; color: #ffecec; }
+  .run .pill { background: #3a3a46; color: #e8e4da; }
+  .next { margin-top: 8px; color: #f0d9a8; }
+  #meterWrap { display: none; margin-top: 10px; }
+  #meterWrap.show { display: block; }
+  #meterTrack { height: 14px; background: #26262f; border-radius: 8px; overflow: hidden; }
+  #meterFill { height: 100%; width: 0%; background: #58c472; border-radius: 8px; transition: width 60ms linear; }
+  #meterLabel { font-size: 12px; color: #b9b4a8; margin-top: 4px; }
+  #camWrap { display: none; margin-top: 10px; }
+  #camWrap.show { display: block; }
+  #camPreview { width: 100%; border-radius: 10px; background: #000; aspect-ratio: 3/4; object-fit: cover; }
+  .fine { font-size: 12px; color: #8f8a7e; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <header class="top"><a href="index.html">← Back to the studio</a></header>
+  <h1>📱 Phone self-check</h1>
+  <p class="sub">Three quick checks to make sure this phone is ready to jam with friends. Each check only runs when you tap its button. <b>Nothing is recorded, saved, or uploaded</b> — the mic and camera are only listened to for a moment, on this phone, and then switched off.</p>
+
+  <!-- MIC -->
+  <section class="card">
+    <h2>🎤 Microphone</h2>
+    <p>Checks that this site can hear your microphone. When the check runs, <b>say something out loud or tap near the mic</b> — you'll see the green bar jump.</p>
+    <button class="bigbtn" id="micBtn">Run mic check</button>
+    <div id="meterWrap"><div id="meterTrack"><div id="meterFill"></div></div><div id="meterLabel">Listening… make some noise!</div></div>
+    <div class="result" id="micResult"></div>
+  </section>
+
+  <!-- CAMERA -->
+  <section class="card">
+    <h2>📷 Camera</h2>
+    <p>Checks that this site can open your front camera. You'll see yourself in the preview — tap "Done" when you've had a look and the camera switches off.</p>
+    <button class="bigbtn" id="camBtn">Run camera check</button>
+    <div id="camWrap"><video id="camPreview" playsinline muted autoplay></video>
+      <button class="ghostbtn" id="camDone">Done — switch camera off</button></div>
+    <div class="result" id="camResult"></div>
+  </section>
+
+  <!-- LATENCY -->
+  <section class="card">
+    <h2>⏱️ Audio delay</h2>
+    <p>Estimates how long this phone takes to get sound out, using the phone's own audio numbers. Under about 80&nbsp;ms keeps everyone in time when jamming together.</p>
+    <button class="bigbtn" id="latBtn">Run audio-delay check</button>
+    <div class="result" id="latResult"></div>
+  </section>
+
+  <p class="fine">Heads-up: if a check asks for permission, your browser will pop up a request — that's normal, and saying yes only applies while this page is open. If all three pass, your phone is ready for a session.</p>
+</div>
+
+<script>
+"use strict";
+function setResult(id, kind, title, body, next) {
+  var el = document.getElementById(id);
+  el.className = "result show " + kind;
+  var pill = kind === "pass" ? "PASSED" : (kind === "fail" ? "DIDN'T PASS" : "CHECKING…");
+  el.innerHTML = '<span class="pill">' + pill + "</span><div>" + title + "</div>" +
+    (body ? "<div>" + body + "</div>" : "") +
+    (next ? '<div class="next"><b>Try this:</b> ' + next + "</div>" : "");
+}
+function clearResult(id) {
+  var el = document.getElementById(id);
+  el.className = "result";
+  el.innerHTML = "";
+}
+function stopStream(s) {
+  if (!s) return;
+  s.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+}
+function micNextStep(e) {
+  var n = (e && e.name) || "";
+  if (n === "NotAllowedError" || n === "SecurityError")
+    return "Tap the lock (or site-settings) icon in your address bar, allow the microphone for this site, then run the check again.";
+  if (n === "NotFoundError" || n === "OverconstrainedError")
+    return "No microphone was found. Restart your browser and try again — on a phone this is unusual, so also check nothing is covering the mic hole.";
+  if (n === "NotReadableError" || n === "AbortError")
+    return "The mic seems busy in another app (a call, voice recorder, or voice assistant). Close those and try again.";
+  if (n === "UnsupportedError")
+    return "This browser can't reach the microphone. Open this page in your phone's main browser — Safari on iPhone, Chrome on Android.";
+  return "Check the microphone permission for this site in your browser settings, then run the check again.";
+}
+function camNextStep(e) {
+  var n = (e && e.name) || "";
+  if (n === "NotAllowedError" || n === "SecurityError")
+    return "Tap the lock (or site-settings) icon in your address bar, allow the camera for this site, then run the check again.";
+  if (n === "NotFoundError" || n === "OverconstrainedError")
+    return "No camera was found. Restart your browser and try again.";
+  if (n === "NotReadableError" || n === "AbortError")
+    return "The camera seems busy in another app. Close any app using the camera and try again.";
+  if (n === "UnsupportedError")
+    return "This browser can't reach the camera. Open this page in your phone's main browser — Safari on iPhone, Chrome on Android.";
+  return "Check the camera permission for this site in your browser settings, then run the check again.";
+}
+
+var micBtn = document.getElementById("micBtn");
+var meterWrap = document.getElementById("meterWrap");
+var meterFill = document.getElementById("meterFill");
+
+micBtn.addEventListener("click", function () {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setResult("micResult", "fail", "This browser can't reach the microphone.",
+      "", "Open this page in your phone's main browser — Safari on iPhone, Chrome on Android.");
+    return;
+  }
+  micBtn.disabled = true;
+  clearResult("micResult");
+  setResult("micResult", "run", "Listening… say something out loud or tap near the mic.", "", "");
+  meterWrap.classList.add("show");
+  meterFill.style.width = "0%";
+  var stream = null, ctx = null;
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(function (s) {
+    stream = s;
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) throw { name: "UnsupportedError" };
+    ctx = new AC();
+    var resume = ctx.resume ? ctx.resume().catch(function(){}) : Promise.resolve();
+    return resume.then(function () {
+      var src = ctx.createMediaStreamSource(stream);
+      var an = ctx.createAnalyser();
+      an.fftSize = 1024;
+      src.connect(an);
+      var buf = new Float32Array(an.fftSize);
+      var peak = 0, t0 = performance.now();
+      return new Promise(function (done) {
+        (function tick() {
+          an.getFloatTimeDomainData(buf);
+          var sum = 0;
+          for (var i = 0; i < buf.length; i++) {
+            var v = Math.abs(buf[i]);
+            if (v > peak) peak = v;
+            sum += buf[i] * buf[i];
+          }
+          var rms = Math.sqrt(sum / buf.length);
+          meterFill.style.width = Math.min(100, Math.round(rms * 400)) + "%";
+          if (performance.now() - t0 < 3000) requestAnimationFrame(tick);
+          else done(peak);
+        })();
+      });
+    });
+  }).then(function (peak) {
+    stopStream(stream);
+    if (ctx) ctx.close().catch(function(){});
+    meterWrap.classList.remove("show");
+    micBtn.disabled = false;
+    if (peak > 0.02) {
+      setResult("micResult", "pass", "Your microphone is working — I could hear you clearly. You're good to record.", "", "");
+    } else {
+      setResult("micResult", "fail", "I couldn't hear anything from your microphone.",
+        "", "Make sure nothing is covering the mic, speak up while the check is running, then try again.");
+    }
+  }).catch(function (e) {
+    stopStream(stream);
+    if (ctx) ctx.close().catch(function(){});
+    meterWrap.classList.remove("show");
+    micBtn.disabled = false;
+    setResult("micResult", "fail", "Your microphone couldn't be reached.", "", micNextStep(e));
+  });
+});
+
+var camBtn = document.getElementById("camBtn");
+var camWrap = document.getElementById("camWrap");
+var camPreview = document.getElementById("camPreview");
+var camDone = document.getElementById("camDone");
+var camStream = null;
+
+camBtn.addEventListener("click", function () {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setResult("camResult", "fail", "This browser can't reach the camera.",
+      "", "Open this page in your phone's main browser — Safari on iPhone, Chrome on Android.");
+    return;
+  }
+  camBtn.disabled = true;
+  clearResult("camResult");
+  setResult("camResult", "run", "Opening your front camera…", "", "");
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false }).then(function (s) {
+    camStream = s;
+    camPreview.srcObject = s;
+    var played = false;
+    var onPlay = function () {
+      if (played) return; played = true;
+      camWrap.classList.add("show");
+      setResult("camResult", "pass", "Your camera is working — you should see yourself in the preview above.",
+        "Tap \"Done\" below the preview when you've had a look and the camera will switch off.", "");
+    };
+    camPreview.addEventListener("playing", onPlay);
+    camPreview.play().catch(function(){});
+    setTimeout(function () {
+      if (!played && camPreview.videoWidth > 0) onPlay();
+    }, 2500);
+  }).catch(function (e) {
+    camBtn.disabled = false;
+    setResult("camResult", "fail", "Your camera couldn't be opened.", "", camNextStep(e));
+  });
+});
+
+camDone.addEventListener("click", function () {
+  stopStream(camStream);
+  camStream = null;
+  camPreview.srcObject = null;
+  camWrap.classList.remove("show");
+  camBtn.disabled = false;
+});
+
+var latBtn = document.getElementById("latBtn");
+latBtn.addEventListener("click", function () {
+  latBtn.disabled = true;
+  clearResult("latResult");
+  setResult("latResult", "run", "Measuring…", "", "");
+  setTimeout(function () {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) {
+        setResult("latResult", "fail", "This browser couldn't share its audio timing.",
+          "", "Open this page in your phone's main browser — Safari on iPhone, Chrome on Android — and run the check again.");
+        latBtn.disabled = false;
+        return;
+      }
+      var ctx = new AC();
+      var hasBase = "baseLatency" in ctx, hasOut = "outputLatency" in ctx;
+      var base = hasBase ? ctx.baseLatency * 1000 : 0;
+      var out = hasOut ? ctx.outputLatency * 1000 : 0;
+      ctx.close().catch(function(){});
+      if (!hasBase && !hasOut) {
+        setResult("latResult", "fail", "This browser didn't share the numbers needed to measure audio delay.",
+          "", "Open this page in Chrome (Android) or Safari (iPhone) and run the check again.");
+      } else {
+        var ms = Math.round(base + out);
+        if (ms <= 80) {
+          setResult("latResult", "pass",
+            "Your phone's audio delay is about " + ms + " ms — fast enough to jam together without anyone dragging.",
+            "", "");
+        } else {
+          setResult("latResult", "fail",
+            "Your phone's audio delay is about " + ms + " ms — that's laggy enough to throw everyone off beat.",
+            "", "Plug in wired earbuds (Bluetooth adds delay), close other apps, and run the check again.");
+        }
+      }
+    } catch (e) {
+      setResult("latResult", "fail", "The audio-delay check couldn't run on this browser.",
+        "", "Open this page in your phone's main browser — Safari on iPhone, Chrome on Android — and try again.");
+    }
+    latBtn.disabled = false;
+  }, 60);
+});
+</script>
+</body>
+</html>
